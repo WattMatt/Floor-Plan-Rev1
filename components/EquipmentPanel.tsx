@@ -486,14 +486,15 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({
         [TaskStatus.DONE]: tasks.filter(t => t.status === TaskStatus.DONE),
     };
 
-    const tasksByAssignee = tasks.reduce((acc, task) => {
+    // FIX: Use generic parameter for reduce to ensure correct type inference for `acc`.
+    const tasksByAssignee = tasks.reduce<Record<string, Task[]>>((acc, task) => {
         const assignee = task.assignedTo?.trim() || 'Unassigned';
         if (!acc[assignee]) {
             acc[assignee] = [];
         }
         acc[assignee].push(task);
         return acc;
-    }, {} as Record<string, Task[]>);
+    }, {});
 
     const itemDict = new Map<string, string>();
     equipment.forEach(e => itemDict.set(e.id, e.name || e.type));

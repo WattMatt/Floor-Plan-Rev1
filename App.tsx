@@ -1,8 +1,7 @@
-
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } from 'react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist/build/pdf.mjs';
-import firebase from 'firebase/compat/app';
+import { User } from '@supabase/supabase-js';
 import { Tool, type EquipmentItem, type SupplyLine, type SupplyZone, type ScaleInfo, type ViewState, type Point, type Containment, ContainmentType, DesignPurpose, PVPanelConfig, RoofMask, PVArrayItem, Task, TaskStatus } from './types';
 import { purposeConfigs, type PurposeConfig } from './purpose.config';
 import Toolbar from './components/Toolbar';
@@ -20,17 +19,19 @@ import PVArrayModal, { PVArrayConfig } from './components/PVArrayModal';
 import LoadDesignModal from './components/LoadDesignModal';
 import BoqModal from './components/BoqModal';
 import TaskModal from './components/TaskModal';
+import { ToastProvider, useToast } from './components/ToastProvider';
 import { 
-    handleSignIn,
-    handleSignOut,
+    signInWithGoogle,
+    signOut,
     onAuthChange,
     saveDesign,
     listDesigns,
     loadDesign,
     type DesignListing,
-    initializeFirebase,
-    isFirebaseInitialized as isFirebaseReady,
-} from './utils/firebase';
+    initializeSupabase,
+    isSupabaseInitialized as isSupabaseReady,
+} from './utils/supabase';
+import { Building, Loader } from 'lucide-react';
 
 
 // Set PDF.js worker source
@@ -58,8 +59,7 @@ const initialDesignState: DesignState = {
     tasks: [],
 };
 
-
-const App: React.FC = () => {
+const MainApp: React.FC = () => {
   const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null);
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [designPurpose, setDesignPurpose] = useState<DesignPurpose | null>(null);
@@ -68,6 +68,7 @@ const App: React.FC = () => {
   const [activeTool, setActiveTool] = useState<Tool>(Tool.PAN);
   const [viewState, setViewState] = useState<ViewState>({ zoom: 1, offset: { x: 0, y: 0 } });
   const [initialViewState, setInitialViewState] = useState<ViewState | null>(null);
+  const toast = useToast();
 
   // --- History State Management ---
   const [history, setHistory] = useState<DesignState[]>([initialDesignState]);
@@ -82,19 +83,16 @@ const App: React.FC = () => {
     const currentState = history[historyIndex];
     const newState = updater(currentState);
 
-    // Prevent adding identical subsequent states to history
     if (JSON.stringify(newState) === JSON.stringify(currentState)) {
         return;
     }
 
     if (commit) {
-        // Create a new history entry, clearing any "redo" history
         const newHistory = history.slice(0, historyIndex + 1);
         newHistory.push(newState);
         setHistory(newHistory);
         setHistoryIndex(newHistory.length - 1);
     } else {
-        // Overwrite the current state without creating a new entry (for live updates like dragging)
         const newHistory = [...history];
         newHistory[historyIndex] = newState;
         setHistory(newHistory);
@@ -135,7 +133,7 @@ const App: React.FC = () => {
   const [isBoqModalOpen, setIsBoqModalOpen] = useState(false);
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Partial<Task> | null>(null);
-
+  const [globalLoadingMessage, setGlobalLoadingMessage] = useState<string | null>(null);
 
   // PV Design State
   const [pvPanelConfig, setPvPanelConfig] = useState<PVPanelConfig | null>(null);
@@ -149,13 +147,12 @@ const App: React.FC = () => {
   const [pendingLine, setPendingLine] = useState<{ points: Point[]; length: number; } | null>(null);
   const [pendingContainment, setPendingContainment] = useState<{ points: Point[]; length: number; type: ContainmentType; } | null>(null);
 
-  // Firebase State
-  const [user, setUser] = useState<firebase.User | null>(null);
+  // Supabase State
+  const [user, setUser] = useState<User | null>(null);
   const [isLoadDesignModalOpen, setIsLoadDesignModalOpen] = useState(false);
   const [designList, setDesignList] = useState<DesignListing[]>([]);
   const [isLoadingDesigns, setIsLoadingDesigns] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [isFirebaseInitialized, setIsFirebaseInitialized] = useState(isFirebaseReady);
+  const [isSupabaseInitialized, setIsSupabaseInitialized] = useState(isSupabaseReady);
 
   const [scaleLine, setScaleLine] = useState<{start: Point, end: Point} | null>(null);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -174,6 +171,7 @@ const App: React.FC = () => {
   }, [tasks]);
 
   const loadPdfData = async (data: ArrayBuffer | Blob, file?: File) => {
+      setGlobalLoadingMessage("Loading PDF...");
       const arrayBuffer = data instanceof Blob ? await data.arrayBuffer() : data;
       const loadingTask = getDocument(arrayBuffer);
       try {
@@ -183,7 +181,9 @@ const App: React.FC = () => {
         setPdfDoc(doc);
       } catch (error) {
         console.error("Error loading PDF: ", error);
-        alert(`Failed to load PDF. Please ensure you are using a valid PDF file and check the browser console for errors. The error was: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        toast.error(`Failed to load PDF: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      } finally {
+        setGlobalLoadingMessage(null);
       }
   }
 
@@ -191,13 +191,13 @@ const App: React.FC = () => {
     const file = event.target.files?.[0];
     if (file && file.type === 'application/pdf') {
       if (file.size === 0) {
-        alert('The selected PDF file is empty. Please select a valid PDF file.');
-        event.target.value = ''; // Reset file input to allow re-selection
+        toast.error('The selected PDF file is empty. Please select a valid PDF file.');
+        event.target.value = '';
         return;
       }
       await loadPdfData(await file.arrayBuffer(), file);
     } else {
-      alert('Please select a valid PDF file.');
+      toast.error('Please select a valid PDF file.');
     }
   };
   
@@ -223,35 +223,24 @@ const App: React.FC = () => {
     setPlacementRotation(0);
     setDesignPurpose(null);
     setPurposeConfig(null);
-    // PV State Reset
     setPvPanelConfig(null);
     setPendingRoofMask(null);
     setPendingPvArrayConfig(null);
     setIsSnappingEnabled(true);
   }
 
-  // Effect to manage state based on tool changes
   useEffect(() => {
-    if (activeTool !== Tool.SELECT) {
-      setSelectedItemId(null);
-    }
+    if (activeTool !== Tool.SELECT) setSelectedItemId(null);
     const isPlacementTool = purposeConfig && (Object.values(purposeConfig.equipmentToToolMap).includes(activeTool) || activeTool === Tool.TOOL_PV_ARRAY);
-    if (!isPlacementTool) {
-      setPlacementRotation(0);
-    }
-    if (activeTool !== Tool.TOOL_PV_ARRAY) {
-      setPendingPvArrayConfig(null);
-    }
-    if (activeTool !== Tool.TOOL_ROOF_DIRECTION && pendingRoofMask?.pitch) {
-        // If user changes tool away from direction drawing, cancel it.
-        setPendingRoofMask(null);
-    }
+    if (!isPlacementTool) setPlacementRotation(0);
+    if (activeTool !== Tool.TOOL_PV_ARRAY) setPendingPvArrayConfig(null);
+    if (activeTool !== Tool.TOOL_ROOF_DIRECTION && pendingRoofMask?.pitch) setPendingRoofMask(null);
   }, [activeTool, purposeConfig, pendingRoofMask]);
 
   const handleToolSelect = (tool: Tool) => {
     if (tool === Tool.TOOL_PV_ARRAY) {
         if (!pvPanelConfig) {
-            alert("Please configure PV panel details before placing an array.");
+            toast.error("Please configure PV panel details before placing an array.");
             return;
         }
         setIsPvArrayModalOpen(true);
@@ -261,17 +250,17 @@ const App: React.FC = () => {
 
   const handleSaveToCloud = async () => {
     if (!user) {
-        alert("Please sign in to save your design to the cloud.");
+        toast.error("Please sign in to save your design to the cloud.");
         return;
     }
     if (!pdfFile) {
-        alert("Cannot save a design without an associated PDF file.");
+        toast.error("Cannot save a design without an associated PDF file.");
         return;
     }
     const designName = prompt("Enter a name for this design:", `Design - ${new Date().toLocaleDateString()}`);
     if (!designName) return;
 
-    setIsSaving(true);
+    setGlobalLoadingMessage("Saving design to cloud...");
     const designData = {
         ...currentDesign,
         designPurpose,
@@ -280,29 +269,29 @@ const App: React.FC = () => {
     };
 
     try {
-        await saveDesign(user, designName, designData, pdfFile);
-        alert(`Design '${designName}' saved successfully to the cloud!`);
+        await saveDesign(designName, designData, pdfFile);
+        toast.success(`Design '${designName}' saved successfully!`);
     } catch (error) {
         console.error("Error saving design:", error);
-        alert(`Failed to save design: ${error instanceof Error ? error.message : 'Unknown Error'}`);
+        toast.error(`Failed to save design: ${error instanceof Error ? error.message : 'Unknown Error'}`);
     } finally {
-        setIsSaving(false);
+        setGlobalLoadingMessage(null);
     }
   };
 
   const handleOpenLoadModal = async () => {
       if(!user) {
-          alert("Please sign in to load designs from the cloud.");
+          toast.error("Please sign in to load designs from the cloud.");
           return;
       }
       setIsLoadDesignModalOpen(true);
       setIsLoadingDesigns(true);
       try {
-          const designs = await listDesigns(user);
+          const designs = await listDesigns();
           setDesignList(designs);
       } catch (error) {
           console.error("Error listing designs:", error);
-          alert(`Failed to load design list: ${error instanceof Error ? error.message : 'Unknown Error'}`);
+          toast.error(`Failed to load design list: ${error instanceof Error ? error.message : 'Unknown Error'}`);
       } finally {
           setIsLoadingDesigns(false);
       }
@@ -311,42 +300,37 @@ const App: React.FC = () => {
   const handleLoadFromCloud = async (designId: string) => {
       if (!user) return;
       setIsLoadDesignModalOpen(false);
+      setGlobalLoadingMessage("Loading design from cloud...");
       try {
-          const { designData, pdfBlob } = await loadDesign(user, designId);
-
-          // Reconstruct the File object to allow re-saving
-          const fileName = designData.pdfStoragePath.split('/').pop() || 'design.pdf';
+          const { designData, pdfBlob } = await loadDesign(designId);
+          const fileName = designData.pdf_storage_path.split('/').pop() || 'design.pdf';
           const loadedFile = new File([pdfBlob], fileName, { type: 'application/pdf' });
-          
-          // Load PDF first, which resets state and sets the new pdfFile
           await loadPdfData(pdfBlob, loadedFile);
           
-          // Set state from loaded design data
           resetStateWith({
               equipment: designData.equipment || [],
               lines: designData.lines || [],
               zones: designData.zones || [],
               containment: designData.containment || [],
-              roofMasks: designData.roofMasks || [],
-              pvArrays: designData.pvArrays || [],
+              roofMasks: designData.roof_masks || [],
+              pvArrays: designData.pv_arrays || [],
               tasks: designData.tasks || [],
           });
-          setScaleInfo(designData.scaleInfo || { pixelDistance: null, realDistance: null, ratio: null });
-          setPvPanelConfig(designData.pvPanelConfig || null);
+          setScaleInfo(designData.scale_info || { pixelDistance: null, realDistance: null, ratio: null });
+          setPvPanelConfig(designData.pv_panel_config || null);
 
-          // Set the correct design purpose
-          if (designData.designPurpose && purposeConfigs[designData.designPurpose as DesignPurpose]) {
-              handleSelectPurpose(designData.designPurpose);
+          if (designData.design_purpose && purposeConfigs[designData.design_purpose as DesignPurpose]) {
+              handleSelectPurpose(designData.design_purpose as DesignPurpose);
           } else {
-              // Fallback to a default if the saved purpose is somehow invalid
               handleSelectPurpose(DesignPurpose.BUDGET_MARKUP);
           }
-
-          alert(`Design '${designData.name}' loaded successfully!`);
+          toast.success(`Design '${designData.name}' loaded successfully!`);
 
       } catch (error) {
           console.error("Error loading design:", error);
-          alert(`Failed to load design: ${error instanceof Error ? error.message : 'Unknown Error'}`);
+          toast.error(`Failed to load design: ${error instanceof Error ? error.message : 'Unknown Error'}`);
+      } finally {
+          setGlobalLoadingMessage(null);
       }
   };
 
@@ -354,33 +338,22 @@ const App: React.FC = () => {
   const handlePrint = () => {
     const canvases = canvasApiRef.current?.getCanvases();
     if (!canvases?.pdf || !canvases?.drawing) {
-        alert('Could not access the canvas elements needed to generate the PDF.');
+        toast.error('Could not access canvas to generate PDF.');
         return;
     }
     setIsExportModalOpen(true);
   };
 
-  const handleOpenBoqModal = () => {
-    setIsBoqModalOpen(true);
-  };
+  const handleOpenBoqModal = () => setIsBoqModalOpen(true);
 
   const handleConfirmExport = async ({ projectName, comments }: { projectName: string; comments: string }) => {
     const canvases = canvasApiRef.current?.getCanvases();
-    if (!canvases?.pdf || !canvases?.drawing) {
-        alert('Could not access the canvas elements. Please try again.');
-        return;
-    }
-    if (!projectName) {
-        alert("Project name is required.");
-        return;
-    }
-    if (!scaleInfo.ratio) {
-        alert("Cannot export without a valid scale. Please set the scale first.");
-        return;
-    }
-    alert("Generating PDF... This may take a moment.");
+    if (!canvases?.pdf || !canvases?.drawing) return toast.error('Canvas elements not ready.');
+    if (!projectName) return toast.error("Project name is required.");
+    if (!scaleInfo.ratio) return toast.error("Cannot export without a valid scale.");
+    
+    toast.info("Generating PDF... This may take a moment.");
     setIsExportModalOpen(false);
-
     try {
         await generatePdf({
             canvases, projectName, equipment, lines, zones, containment, comments, 
@@ -388,7 +361,7 @@ const App: React.FC = () => {
         });
     } catch (error) {
         console.error("Failed to generate PDF:", error);
-        alert(`An error occurred while generating the PDF: ${error instanceof Error ? error.message : String(error)}`);
+        toast.error(`PDF Generation Error: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -406,13 +379,12 @@ const App: React.FC = () => {
         realDistance: realDistance,
         ratio: realDistance / scaleInfo.pixelDistance,
       });
-      if (designPurpose === DesignPurpose.PV_DESIGN) {
-          setIsPvConfigModalOpen(true);
-      }
+      if (designPurpose === DesignPurpose.PV_DESIGN) setIsPvConfigModalOpen(true);
     }
     setIsScaleModalOpen(false);
     setScaleLine(null);
     setActiveTool(Tool.PAN);
+    toast.success("Scale set successfully!");
   };
   
   const handleInitialViewCalculated = useCallback((vs: ViewState) => {
@@ -421,49 +393,20 @@ const App: React.FC = () => {
   }, []);
 
   const handleResetZoom = useCallback(() => {
-      if(initialViewState) {
-          setViewState(initialViewState);
-      }
+      if(initialViewState) setViewState(initialViewState);
   }, [initialViewState]);
   
-  // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-        if ((e.target as HTMLElement).nodeName === 'INPUT' || (e.target as HTMLElement).nodeName === 'TEXTAREA') {
-            return;
-        }
-
-        // Undo/Redo shortcuts
-        if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
-            e.preventDefault();
-            if (e.shiftKey) {
-                handleRedo();
-            } else {
-                handleUndo();
-            }
-            return;
-        }
-        if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
-            e.preventDefault();
-            handleRedo();
-            return;
-        }
-
-
+        if ((e.target as HTMLElement).nodeName === 'INPUT' || (e.target as HTMLElement).nodeName === 'TEXTAREA') return;
+        if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); e.shiftKey ? handleRedo() : handleUndo(); return; }
+        if ((e.ctrlKey || e.metaKey) && e.key === 'y') { e.preventDefault(); handleRedo(); return; }
         const isPlacementTool = purposeConfig && (Object.values(purposeConfig.equipmentToToolMap).includes(activeTool) || (activeTool === Tool.TOOL_PV_ARRAY && !!pendingPvArrayConfig));
-        if ((e.key === 'r' || e.key === 'R') && isPlacementTool) {
-            e.preventDefault();
-            setPlacementRotation(prev => (prev + 45) % 360);
-        }
-        if (e.key === 'f' || e.key === 'F') {
-            e.preventDefault();
-            handleResetZoom();
-        }
+        if ((e.key === 'r' || e.key === 'R') && isPlacementTool) { e.preventDefault(); setPlacementRotation(prev => (prev + 45) % 360); }
+        if (e.key === 'f' || e.key === 'F') { e.preventDefault(); handleResetZoom(); }
     };
     window.addEventListener('keydown', handleKeyDown);
-    return () => {
-        window.removeEventListener('keydown', handleKeyDown);
-    };
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, [activeTool, purposeConfig, handleResetZoom, pendingPvArrayConfig, handleUndo, handleRedo]);
 
   const handleLvLineComplete = useCallback((line: { points: Point[]; length: number; }) => {
@@ -472,16 +415,9 @@ const App: React.FC = () => {
   }, []);
   
   const handleContainmentDrawComplete = useCallback((line: { points: Point[]; length: number; type: ContainmentType; }) => {
-      const typesWithoutSizeModal = [
-        ContainmentType.SLEEVES, ContainmentType.POWERSKIRTING, ContainmentType.P2000_TRUNKING,
-        ContainmentType.P8000_TRUNKING, ContainmentType.P9000_TRUNKING,
-      ];
-
+      const typesWithoutSizeModal = [ContainmentType.SLEEVES, ContainmentType.POWERSKIRTING, ContainmentType.P2000_TRUNKING, ContainmentType.P8000_TRUNKING, ContainmentType.P9000_TRUNKING];
       if (typesWithoutSizeModal.includes(line.type)) {
-        setContainment(prev => [...prev, {
-            id: `containment-${Date.now()}`, type: line.type, size: line.type, 
-            points: line.points, length: line.length,
-        }]);
+        setContainment(prev => [...prev, { id: `containment-${Date.now()}`, type: line.type, size: line.type, points: line.points, length: line.length, }]);
       } else {
         setPendingContainment(line);
         setIsContainmentModalOpen(true);
@@ -490,202 +426,113 @@ const App: React.FC = () => {
 
   const handleCableDetailsSubmit = (details: { from: string, to: string, cableType: string, terminationCount: number, startHeight: number, endHeight: number, label: string }) => {
       if (!pendingLine) return;
-      
       const pathLength = pendingLine.length;
       const totalLength = pathLength + details.startHeight + details.endHeight;
-      
       const newLine: SupplyLine = {
-          id: `line-${Date.now()}`, 
-          name: `${details.from} to ${details.to}`, 
-          type: 'lv' as const,
-          points: pendingLine.points, 
-          length: totalLength,
-          pathLength: pathLength,
-          from: details.from,
-          to: details.to,
-          cableType: details.cableType,
-          terminationCount: details.terminationCount,
-          startHeight: details.startHeight,
-          endHeight: details.endHeight,
-          label: details.label
+          id: `line-${Date.now()}`, name: `${details.from} to ${details.to}`, type: 'lv' as const, points: pendingLine.points, 
+          length: totalLength, pathLength: pathLength, from: details.from, to: details.to, cableType: details.cableType,
+          terminationCount: details.terminationCount, startHeight: details.startHeight, endHeight: details.endHeight, label: details.label
       };
       setLines(prev => [...prev, newLine]);
-
       setIsCableModalOpen(false);
       setPendingLine(null);
   };
 
   const handleContainmentDetailsSubmit = (details: { size: string }) => {
       if (!pendingContainment) return;
-      setContainment(prev => [...prev, {
-          id: `containment-${Date.now()}`, type: pendingContainment.type, size: details.size,
-          points: pendingContainment.points, length: pendingContainment.length,
-      }]);
+      setContainment(prev => [...prev, { id: `containment-${Date.now()}`, type: pendingContainment.type, size: details.size, points: pendingContainment.points, length: pendingContainment.length, }]);
       setIsContainmentModalOpen(false);
       setPendingContainment(null);
   };
   
-  const handleEquipmentUpdate = (updatedItem: EquipmentItem) => {
-    setEquipment(prev => prev.map(item => item.id === updatedItem.id ? updatedItem : item));
-  };
-
-  const handleZoneUpdate = (updatedZone: SupplyZone) => {
-    setZones(prev => prev.map(zone => zone.id === updatedZone.id ? updatedZone : zone));
-  };
+  const handleEquipmentUpdate = (updatedItem: EquipmentItem) => setEquipment(prev => prev.map(item => item.id === updatedItem.id ? updatedItem : item));
+  const handleZoneUpdate = (updatedZone: SupplyZone) => setZones(prev => prev.map(zone => zone.id === updatedZone.id ? updatedZone : zone));
 
   const handleDeleteSelectedItem = () => {
     if (!selectedItemId) return;
-    
-    setState(prev => {
-        const newEquipment = prev.equipment.filter(e => e.id !== selectedItemId);
-        const newZones = prev.zones.filter(z => z.id !== selectedItemId);
-        const newPvArrays = prev.pvArrays.filter(p => p.id !== selectedItemId);
-        const newLines = prev.lines.filter(l => l.id !== selectedItemId);
-        const newTasks = prev.tasks.filter(t => t.linkedItemId !== selectedItemId);
-
-        if (newEquipment.length < prev.equipment.length || newZones.length < prev.zones.length || newPvArrays.length < prev.pvArrays.length || newLines.length < prev.lines.length) {
-            if (window.confirm(`Are you sure you want to delete this item? This will also delete any linked tasks.`)) {
-                setSelectedItemId(null);
-                return { ...prev, equipment: newEquipment, zones: newZones, pvArrays: newPvArrays, lines: newLines, tasks: newTasks };
-            }
-        }
-        return prev;
-    });
+    if (window.confirm(`Are you sure you want to delete this item? This will also delete any linked tasks.`)) {
+        setState(prev => {
+            setSelectedItemId(null);
+            return { 
+                ...prev, 
+                equipment: prev.equipment.filter(e => e.id !== selectedItemId),
+                zones: prev.zones.filter(z => z.id !== selectedItemId),
+                pvArrays: prev.pvArrays.filter(p => p.id !== selectedItemId),
+                lines: prev.lines.filter(l => l.id !== selectedItemId),
+                tasks: prev.tasks.filter(t => t.linkedItemId !== selectedItemId),
+            };
+        });
+    }
   };
 
-  // --- Task Handlers ---
-  const handleOpenTaskModal = (task: Partial<Task> | null) => {
-      setEditingTask(task);
-      setIsTaskModalOpen(true);
-  };
+  const handleOpenTaskModal = (task: Partial<Task> | null) => { setEditingTask(task); setIsTaskModalOpen(true); };
   
   const handleTaskSubmit = (taskData: Omit<Task, 'id'> & { id?: string }) => {
       if (taskData.id) {
-          // Editing existing task
           setTasks(prev => prev.map(t => t.id === taskData.id ? { ...t, ...taskData } as Task : t));
       } else {
-          // Creating new task
-          const newTask: Task = {
-              ...taskData,
-              id: `task-${Date.now()}`,
-          };
-          setTasks(prev => [...prev, newTask]);
+          setTasks(prev => [...prev, { ...taskData, id: `task-${Date.now()}` } as Task]);
       }
       setIsTaskModalOpen(false);
       setEditingTask(null);
   };
 
+  const handlePvConfigSubmit = (config: PVPanelConfig) => { setPvPanelConfig(config); setIsPvConfigModalOpen(false); setActiveTool(Tool.PAN); };
+  const handleRoofMaskDrawComplete = useCallback((points: Point[]) => { setPendingRoofMask({ points }); setIsRoofMaskModalOpen(true); }, []);
+  const handleRoofMaskSubmit = useCallback((details: { pitch: number }) => { if (!pendingRoofMask) return; setPendingRoofMask(prev => ({ ...prev!, pitch: details.pitch })); setActiveTool(Tool.TOOL_ROOF_DIRECTION); setIsRoofMaskModalOpen(false); }, [pendingRoofMask]);
+  const handleRoofDirectionSet = useCallback((direction: number) => { if (!pendingRoofMask || typeof pendingRoofMask.pitch === 'undefined') return; setRoofMasks(prev => [...prev, { id: `roofmask-${Date.now()}`, points: pendingRoofMask.points, pitch: pendingRoofMask.pitch, direction: direction }]); setPendingRoofMask(null); setActiveTool(Tool.PAN); }, [pendingRoofMask, setRoofMasks]);
+  const cancelRoofCreation = useCallback(() => { setPendingRoofMask(null); setActiveTool(Tool.PAN); }, []);
+  const handlePvArrayConfigSubmit = (config: PVArrayConfig) => { setPendingPvArrayConfig(config); setIsPvArrayModalOpen(false); };
+  const handlePlacePvArray = (array: Omit<PVArrayItem, 'id'>) => setPvArrays(prev => [...prev, { id: `pvarray-${Date.now()}`, ...array }]);
 
-  // --- PV DESIGN HANDLERS ---
-  const handlePvConfigSubmit = (config: PVPanelConfig) => {
-      setPvPanelConfig(config);
-      setIsPvConfigModalOpen(false);
-      setActiveTool(Tool.PAN);
-  };
-  const handleRoofMaskDrawComplete = useCallback((points: Point[]) => {
-      setPendingRoofMask({ points });
-      setIsRoofMaskModalOpen(true);
-  }, []);
-
-  const handleRoofMaskSubmit = useCallback((details: { pitch: number }) => {
-      if (!pendingRoofMask) return;
-      setPendingRoofMask(prev => ({ ...prev!, pitch: details.pitch }));
-      setActiveTool(Tool.TOOL_ROOF_DIRECTION);
-      setIsRoofMaskModalOpen(false);
-  }, [pendingRoofMask]);
-  
-  const handleRoofDirectionSet = useCallback((direction: number) => {
-      if (!pendingRoofMask || typeof pendingRoofMask.pitch === 'undefined') return;
-      const newMask: RoofMask = {
-          id: `roofmask-${Date.now()}`,
-          points: pendingRoofMask.points,
-          pitch: pendingRoofMask.pitch,
-          direction: direction
-      };
-      setRoofMasks(prev => [...prev, newMask]);
-      setPendingRoofMask(null);
-      setActiveTool(Tool.PAN);
-  }, [pendingRoofMask, setRoofMasks]);
-
-  const cancelRoofCreation = useCallback(() => {
-    setPendingRoofMask(null);
-    setActiveTool(Tool.PAN);
-  }, []);
-
-
-  const handlePvArrayConfigSubmit = (config: PVArrayConfig) => {
-    setPendingPvArrayConfig(config);
-    setIsPvArrayModalOpen(false);
-  };
-  const handlePlacePvArray = (array: Omit<PVArrayItem, 'id'>) => {
-      setPvArrays(prev => [...prev, { id: `pvarray-${Date.now()}`, ...array }]);
-  };
-
-  // Firebase Initialization & Auth Effect
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
-        if (event.data && event.data.type === 'firebase-config' && event.data.config) {
-            if (!isFirebaseReady) {
-                initializeFirebase(event.data.config);
-                setIsFirebaseInitialized(true);
+        if (event.data && event.data.type === 'supabase-config' && event.data.config) {
+            if (!isSupabaseReady) {
+                initializeSupabase(event.data.config.url, event.data.config.anonKey);
+                setIsSupabaseInitialized(true);
             }
         }
     };
-
     window.addEventListener('message', handleMessage);
-    if(isFirebaseReady && !isFirebaseInitialized) {
-        setIsFirebaseInitialized(true);
-    }
-    
-    return () => {
-        window.removeEventListener('message', handleMessage);
-    };
-  }, [isFirebaseInitialized]);
+    if(isSupabaseReady && !isSupabaseInitialized) setIsSupabaseInitialized(true);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [isSupabaseInitialized]);
 
   useEffect(() => {
-    if (isFirebaseInitialized) {
-      const unsubscribe = onAuthChange(setUser);
-      return () => unsubscribe();
+    if (isSupabaseInitialized) {
+      const { data: { subscription } } = onAuthChange((_event, session) => setUser(session?.user ?? null));
+      return () => subscription.unsubscribe();
     }
-  }, [isFirebaseInitialized]);
+  }, [isSupabaseInitialized]);
 
-  const pvDesignReady = useMemo(() => {
-    return designPurpose !== DesignPurpose.PV_DESIGN || (!!scaleInfo.ratio && !!pvPanelConfig);
-  }, [designPurpose, scaleInfo.ratio, pvPanelConfig]);
+  const pvDesignReady = useMemo(() => designPurpose !== DesignPurpose.PV_DESIGN || (!!scaleInfo.ratio && !!pvPanelConfig), [designPurpose, scaleInfo.ratio, pvPanelConfig]);
 
   return (
-    <div className="flex h-full w-full bg-gray-900 text-gray-100 font-sans">
+    <div className="flex h-full w-full bg-gray-900 text-gray-100 font-sans relative">
+      {globalLoadingMessage && (
+        <div className="absolute inset-0 bg-gray-900/80 z-[100] flex flex-col items-center justify-center gap-4 animate-fade-in">
+          <Loader className="h-12 w-12 text-indigo-400 animate-spin" />
+          <p className="text-lg text-gray-300">{globalLoadingMessage}</p>
+        </div>
+      )}
       <Toolbar
-        activeTool={activeTool}
-        onToolSelect={handleToolSelect}
-        onFileChange={handleFileChange}
-        onSaveToCloud={handleSaveToCloud}
-        isSaving={isSaving}
-        onLoadFromCloud={handleOpenLoadModal}
-        onPrint={handlePrint}
-        onGenerateBoq={handleOpenBoqModal}
-        isPdfLoaded={!!pdfDoc && !!purposeConfig}
-        placementRotation={placementRotation}
-        onRotationChange={setPlacementRotation}
-        purposeConfig={purposeConfig}
-        isPvDesignReady={pvDesignReady}
-        isSnappingEnabled={isSnappingEnabled}
-        setIsSnappingEnabled={setIsSnappingEnabled}
-        isFirebaseAvailable={isFirebaseInitialized}
-        user={user}
-        onSignIn={handleSignIn}
-        onSignOut={handleSignOut}
-        onUndo={handleUndo}
-        onRedo={handleRedo}
-        canUndo={canUndo}
-        canRedo={canRedo}
+        activeTool={activeTool} onToolSelect={handleToolSelect} onFileChange={handleFileChange}
+        onSaveToCloud={handleSaveToCloud} onLoadFromCloud={handleOpenLoadModal} onPrint={handlePrint}
+        onGenerateBoq={handleOpenBoqModal} isPdfLoaded={!!pdfDoc && !!purposeConfig}
+        placementRotation={placementRotation} onRotationChange={setPlacementRotation}
+        purposeConfig={purposeConfig} isPvDesignReady={pvDesignReady} isSnappingEnabled={isSnappingEnabled}
+        setIsSnappingEnabled={setIsSnappingEnabled} isFirebaseAvailable={isSupabaseInitialized} user={user}
+        onSignIn={signInWithGoogle} onSignOut={signOut} onUndo={handleUndo} onRedo={handleRedo}
+        canUndo={canUndo} canRedo={canRedo}
       />
       <main ref={mainContainerRef} className="flex-1 flex flex-col relative overflow-hidden">
           {!pdfDoc ? (
              <div className="flex-1 flex justify-center items-center bg-gray-800">
-                <div className="text-center p-8 border-2 border-dashed border-gray-600 rounded-lg">
+                <div className="text-center p-8 border-2 border-dashed border-gray-600 rounded-lg animate-fade-in">
+                    <Building className="mx-auto h-12 w-12 text-gray-500 mb-4" />
                     <h2 className="text-2xl font-semibold text-gray-400">Load a PDF Floor Plan</h2>
-                    <p className="mt-2 text-gray-500">Use the toolbar on the left to select and upload a PDF file to begin.</p>
+                    <p className="mt-2 text-gray-500">Use the toolbar on the left to begin your project.</p>
                 </div>
             </div>
           ) : !purposeConfig ? (
@@ -693,53 +540,23 @@ const App: React.FC = () => {
           ) : (
             <>
               <Canvas
-                  ref={canvasApiRef}
-                  pdfDoc={pdfDoc}
-                  activeTool={activeTool}
-                  viewState={viewState}
-                  setViewState={setViewState}
-                  equipment={equipment}
-                  setEquipment={setEquipment}
-                  lines={lines}
-                  setLines={setLines}
-                  zones={zones}
-                  setZones={setZones}
-                  containment={containment}
-                  setContainment={setContainment}
-                  scaleInfo={scaleInfo}
-                  onScalingComplete={completeScaling}
-                  onLvLineComplete={handleLvLineComplete}
-                  onContainmentDrawComplete={handleContainmentDrawComplete}
-                  scaleLine={scaleLine}
-                  onInitialViewCalculated={handleInitialViewCalculated}
-                  selectedItemId={selectedItemId}
-                  setSelectedItemId={setSelectedItemId}
-                  placementRotation={placementRotation}
-                  purposeConfig={purposeConfig}
-                  pvPanelConfig={pvPanelConfig}
-                  roofMasks={roofMasks}
-                  onRoofMaskDrawComplete={handleRoofMaskDrawComplete}
-                  pendingPvArrayConfig={pendingPvArrayConfig}
-                  onPlacePvArray={handlePlacePvArray}
-                  isSnappingEnabled={isSnappingEnabled}
-                  pendingRoofMask={pendingRoofMask}
-                  onRoofDirectionSet={handleRoofDirectionSet}
-                  onCancelRoofCreation={cancelRoofCreation}
-                  pvArrays={pvArrays}
-                  setPvArrays={setPvArrays}
-                  tasks={tasks}
+                  ref={canvasApiRef} pdfDoc={pdfDoc} activeTool={activeTool} viewState={viewState} setViewState={setViewState}
+                  equipment={equipment} setEquipment={setEquipment} lines={lines} setLines={setLines}
+                  zones={zones} setZones={setZones} containment={containment} setContainment={setContainment}
+                  scaleInfo={scaleInfo} onScalingComplete={completeScaling} onLvLineComplete={handleLvLineComplete}
+                  onContainmentDrawComplete={handleContainmentDrawComplete} scaleLine={scaleLine} onInitialViewCalculated={handleInitialViewCalculated}
+                  selectedItemId={selectedItemId} setSelectedItemId={setSelectedItemId} placementRotation={placementRotation}
+                  purposeConfig={purposeConfig} pvPanelConfig={pvPanelConfig} roofMasks={roofMasks} onRoofMaskDrawComplete={handleRoofMaskDrawComplete}
+                  pendingPvArrayConfig={pendingPvArrayConfig} onPlacePvArray={handlePlacePvArray} isSnappingEnabled={isSnappingEnabled}
+                  pendingRoofMask={pendingRoofMask} onRoofDirectionSet={handleRoofDirectionSet} onCancelRoofCreation={cancelRoofCreation}
+                  pvArrays={pvArrays} setPvArrays={setPvArrays} tasks={tasks}
               />
               {(designPurpose === DesignPurpose.PV_DESIGN && !pvDesignReady) && (
                  <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20">
                     <div className="text-center p-4 bg-gray-800/95 border border-gray-600 rounded-lg shadow-2xl">
                         {!scaleInfo.ratio ? (
-                            <>
-                               <h2 className="text-lg font-semibold text-gray-300">Set Scale for PV Design</h2>
-                               <p className="mt-1 text-sm text-gray-400">The <span className='text-indigo-400 font-semibold'>Scale</span> tool is active. Click the start and end points of a known length.</p>
-                            </>
-                        ) : (
-                            <h2 className="text-lg font-semibold text-gray-300">Awaiting Panel Configuration...</h2>
-                        )}
+                            <><h2 className="text-lg font-semibold text-gray-300">Set Scale for PV Design</h2><p className="mt-1 text-sm text-gray-400">The <span className='text-indigo-400 font-semibold'>Scale</span> tool is active. Click the start and end points of a known length.</p></>
+                        ) : (<h2 className="text-lg font-semibold text-gray-300">Awaiting Panel Configuration...</h2>)}
                     </div>
                 </div>
               )}
@@ -747,87 +564,29 @@ const App: React.FC = () => {
           )}
       </main>
       {pdfDoc && purposeConfig && pvDesignReady && <EquipmentPanel 
-        equipment={equipment} 
-        lines={lines} 
-        zones={zones} 
-        containment={containment}
-        selectedItemId={selectedItemId}
-        setSelectedItemId={setSelectedItemId}
-        onEquipmentUpdate={handleEquipmentUpdate}
-        onZoneUpdate={handleZoneUpdate}
-        purposeConfig={purposeConfig}
-        designPurpose={designPurpose!}
-        pvPanelConfig={pvPanelConfig}
-        pvArrays={pvArrays}
-        onDeleteItem={handleDeleteSelectedItem}
-        tasks={tasks}
-        onOpenTaskModal={handleOpenTaskModal}
+        equipment={equipment} lines={lines} zones={zones} containment={containment} selectedItemId={selectedItemId}
+        setSelectedItemId={setSelectedItemId} onEquipmentUpdate={handleEquipmentUpdate} onZoneUpdate={handleZoneUpdate}
+        purposeConfig={purposeConfig} designPurpose={designPurpose!} pvPanelConfig={pvPanelConfig}
+        pvArrays={pvArrays} onDeleteItem={handleDeleteSelectedItem} tasks={tasks} onOpenTaskModal={handleOpenTaskModal}
       />}
-      <ScaleModal
-        isOpen={isScaleModalOpen}
-        onClose={() => { setIsScaleModalOpen(false); setScaleLine(null); if (!scaleInfo.ratio) setActiveTool(Tool.PAN); }}
-        onSubmit={handleScaleSubmit}
-      />
-      <CableDetailsModal
-        isOpen={isCableModalOpen}
-        onClose={() => { setIsCableModalOpen(false); setPendingLine(null); }}
-        onSubmit={handleCableDetailsSubmit}
-        existingCableTypes={uniqueCableTypes}
-        purposeConfig={purposeConfig}
-      />
-      <ContainmentDetailsModal
-        isOpen={isContainmentModalOpen}
-        onClose={() => { setIsContainmentModalOpen(false); setPendingContainment(null); }}
-        onSubmit={handleContainmentDetailsSubmit}
-        purposeConfig={purposeConfig}
-      />
-      <ExportPreviewModal
-        isOpen={isExportModalOpen}
-        onClose={() => setIsExportModalOpen(false)}
-        onConfirm={handleConfirmExport}
-        equipment={equipment}
-        lines={lines}
-        zones={zones}
-        containment={containment}
-        pvPanelConfig={pvPanelConfig}
-        pvArrays={pvArrays}
-      />
-      <PVConfigModal
-        isOpen={isPvConfigModalOpen}
-        onClose={() => setIsPvConfigModalOpen(false)}
-        onSubmit={handlePvConfigSubmit}
-      />
-      <RoofMaskModal
-        isOpen={isRoofMaskModalOpen}
-        onClose={() => { setIsRoofMaskModalOpen(false); setPendingRoofMask(null); }}
-        onSubmit={handleRoofMaskSubmit}
-      />
-      <PVArrayModal
-        isOpen={isPvArrayModalOpen}
-        onClose={() => { setIsPvArrayModalOpen(false); setActiveTool(Tool.PAN); }}
-        onSubmit={handlePvArrayConfigSubmit}
-      />
-       <LoadDesignModal
-        isOpen={isLoadDesignModalOpen}
-        onClose={() => setIsLoadDesignModalOpen(false)}
-        onLoad={handleLoadFromCloud}
-        designs={designList}
-        isLoading={isLoadingDesigns}
-      />
-       <BoqModal
-        isOpen={isBoqModalOpen}
-        onClose={() => setIsBoqModalOpen(false)}
-        projectData={{ equipment, lines, containment, zones }}
-      />
-      <TaskModal
-        isOpen={isTaskModalOpen}
-        onClose={() => { setIsTaskModalOpen(false); setEditingTask(null); }}
-        onSubmit={handleTaskSubmit}
-        task={editingTask}
-        assigneeList={assigneeList}
-      />
+      <ScaleModal isOpen={isScaleModalOpen} onClose={() => { setIsScaleModalOpen(false); setScaleLine(null); if (!scaleInfo.ratio) setActiveTool(Tool.PAN); }} onSubmit={handleScaleSubmit} />
+      <CableDetailsModal isOpen={isCableModalOpen} onClose={() => { setIsCableModalOpen(false); setPendingLine(null); }} onSubmit={handleCableDetailsSubmit} existingCableTypes={uniqueCableTypes} purposeConfig={purposeConfig} />
+      <ContainmentDetailsModal isOpen={isContainmentModalOpen} onClose={() => { setIsContainmentModalOpen(false); setPendingContainment(null); }} onSubmit={handleContainmentDetailsSubmit} purposeConfig={purposeConfig} />
+      <ExportPreviewModal isOpen={isExportModalOpen} onClose={() => setIsExportModalOpen(false)} onConfirm={handleConfirmExport} equipment={equipment} lines={lines} zones={zones} containment={containment} pvPanelConfig={pvPanelConfig} pvArrays={pvArrays} />
+      <PVConfigModal isOpen={isPvConfigModalOpen} onClose={() => setIsPvConfigModalOpen(false)} onSubmit={handlePvConfigSubmit} />
+      <RoofMaskModal isOpen={isRoofMaskModalOpen} onClose={() => { setIsRoofMaskModalOpen(false); setPendingRoofMask(null); }} onSubmit={handleRoofMaskSubmit} />
+      <PVArrayModal isOpen={isPvArrayModalOpen} onClose={() => { setIsPvArrayModalOpen(false); setActiveTool(Tool.PAN); }} onSubmit={handlePvArrayConfigSubmit} />
+      <LoadDesignModal isOpen={isLoadDesignModalOpen} onClose={() => setIsLoadDesignModalOpen(false)} onLoad={handleLoadFromCloud} designs={designList} isLoading={isLoadingDesigns} />
+      <BoqModal isOpen={isBoqModalOpen} onClose={() => setIsBoqModalOpen(false)} projectData={{ equipment, lines, containment, zones }} />
+      <TaskModal isOpen={isTaskModalOpen} onClose={() => { setIsTaskModalOpen(false); setEditingTask(null); }} onSubmit={handleTaskSubmit} task={editingTask} assigneeList={assigneeList} />
     </div>
   );
 };
+
+const App: React.FC = () => (
+    <ToastProvider>
+        <MainApp />
+    </ToastProvider>
+);
 
 export default App;

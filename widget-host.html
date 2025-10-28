@@ -20,7 +20,7 @@
     <main class="max-w-5xl mx-auto">
         <h2 class="text-2xl font-semibold text-gray-700 mb-4">Floor Plan Widget</h2>
         <div class="bg-white p-2 sm:p-4 rounded-xl shadow-lg">
-            <p class="mb-4 text-gray-700 text-sm sm:text-base">The tool below is running in an isolated iframe. It connects to the same Firebase backend for data storage, but its UI is completely encapsulated.</p>
+            <p class="mb-4 text-gray-700 text-sm sm:text-base">The tool below is running in an isolated iframe. It connects to the Supabase backend for data storage, but its UI is completely encapsulated.</p>
             <div class="w-full h-[85vh] border-2 border-gray-300 rounded-lg overflow-hidden bg-gray-900">
                 <iframe 
                     id="floorplan-widget"
@@ -41,22 +41,18 @@
         const widgetFrame = document.getElementById('floorplan-widget');
 
         // --- IMPORTANT ---
-        // This configuration is now correctly filled out.
-        const firebaseConfigForWidget = {
-            apiKey: "AIzaSyB4tQGmHWKm5oJP8O-QX7t3xdzrkigNyWY",
-            authDomain: "wm-consulting-ptiu4.firebaseapp.com",
-            databaseURL: "https://wm-consulting-ptiu4-default-rtdb.firebaseio.com",
-            projectId: "wm-consulting-ptiu4",
-            storageBucket: "wm-consulting-ptiu4.appspot.com",
-            messagingSenderId: "116352726771",
-            appId: "1:116352726771:web:cab4716642e82d1bb62986"
+        // Replace these with your actual Supabase project URL and anon key.
+        // It's recommended to load these from environment variables in a real application.
+        const supabaseConfigForWidget = {
+            url: "YOUR_SUPABASE_URL",
+            anonKey: "YOUR_SUPABASE_ANON_KEY"
         };
 
         widgetFrame.onload = () => {
-            console.log("Widget iframe loaded. Sending Firebase config...");
+            console.log("Widget iframe loaded. Sending Supabase config...");
             const message = {
-                type: 'firebase-config',
-                config: firebaseConfigForWidget
+                type: 'supabase-config',
+                config: supabaseConfigForWidget
             };
             // The targetOrigin should be the widget's URL in a production environment
             // for security. Using '*' is acceptable for local development.

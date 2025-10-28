@@ -1,7 +1,6 @@
-
 import React, { useMemo, useState } from 'react';
 import type { LucideProps } from 'lucide-react';
-import firebase from 'firebase/compat/app';
+import { User } from '@supabase/supabase-js';
 import { MousePointer, Hand, Ruler, Route, Layers, Save, FolderOpen, Network, Shield, Server, RotateCw, Printer, Square, LayoutGrid, Sun, Magnet, LogIn, LogOut, Cloud, User as UserIcon, Sparkles, Wrench, Edit, ShieldQuestion, Power, Plug, Undo2, Redo2 } from 'lucide-react';
 import { Tool, DesignPurpose, MarkupToolCategory, MARKUP_TOOL_CATEGORIES } from '../types';
 import { type PurposeConfig } from '../purpose.config';
@@ -20,7 +19,7 @@ const GlobalToolButton: React.FC<Pick<ToolButtonProps, 'icon' | 'label' | 'onCli
   <button
     onClick={onClick}
     disabled={disabled}
-    className={`flex items-center w-full text-left p-2.5 rounded-md transition-colors duration-200 hover:bg-gray-700 text-gray-300 ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+    className={`flex items-center w-full text-left p-2.5 rounded-md transition-colors duration-200 text-gray-300 ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-700'}`}
     title={label}
   >
     <Icon className="h-5 w-5 mr-3 flex-shrink-0" />
@@ -50,7 +49,6 @@ interface ToolbarProps {
   onToolSelect: (tool: Tool) => void;
   onFileChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
   onSaveToCloud: () => void;
-  isSaving: boolean;
   onLoadFromCloud: () => void;
   onPrint: () => void;
   onGenerateBoq: () => void;
@@ -61,8 +59,8 @@ interface ToolbarProps {
   isPvDesignReady: boolean;
   isSnappingEnabled: boolean;
   setIsSnappingEnabled: React.Dispatch<React.SetStateAction<boolean>>;
-  isFirebaseAvailable: boolean;
-  user: firebase.User | null;
+  isFirebaseAvailable: boolean; // Renamed for clarity but serves same purpose for Supabase
+  user: User | null;
   onSignIn: () => void;
   onSignOut: () => void;
   onUndo: () => void;
@@ -90,7 +88,7 @@ const categoryLabels: Record<MarkupToolCategory, { label: string; icon: React.El
 };
 
 const Toolbar: React.FC<ToolbarProps> = ({ 
-  activeTool, onToolSelect, onFileChange, onSaveToCloud, isSaving, onLoadFromCloud, onPrint, isPdfLoaded,
+  activeTool, onToolSelect, onFileChange, onSaveToCloud, onLoadFromCloud, onPrint, isPdfLoaded,
   placementRotation, onRotationChange, purposeConfig, isPvDesignReady, isSnappingEnabled, setIsSnappingEnabled,
   onGenerateBoq, isFirebaseAvailable, user, onSignIn, onSignOut,
   onUndo, onRedo, canUndo, canRedo
@@ -133,33 +131,32 @@ const Toolbar: React.FC<ToolbarProps> = ({
   }, [purposeConfig, allPurposeTools]);
 
   return (
-    <aside className="w-72 bg-gray-800 p-4 flex flex-col space-y-4 overflow-y-auto shadow-2xl z-10">
-      {/* --- Global Header & Actions --- */}
+    <aside className="w-72 bg-gray-800 p-4 flex flex-col space-y-4 overflow-y-auto shadow-2xl z-10 border-r border-gray-700/50">
       <div>
         <h1 className="text-xl font-bold text-white mb-2">Floor Plan Markup</h1>
         <p className="text-sm text-indigo-300 h-5">{purposeConfig?.label || ''}</p>
       </div>
 
       <div className="space-y-2">
-        <label htmlFor="pdf-upload" className="flex items-center w-full text-left p-2.5 rounded-md transition-colors duration-200 hover:bg-gray-700 text-gray-300 cursor-pointer">
+        <label htmlFor="pdf-upload" className="flex items-center w-full text-left p-2.5 rounded-md transition-colors duration-200 hover:bg-indigo-500 hover:text-white bg-gray-700/50 text-gray-200 cursor-pointer">
             <FolderOpen className="h-5 w-5 mr-3 flex-shrink-0" />
-            <span className="flex-grow text-sm font-medium">Load PDF</span>
+            <span className="flex-grow text-sm font-semibold">Load PDF File</span>
         </label>
         <input id="pdf-upload" type="file" className="hidden" onChange={onFileChange} accept=".pdf" />
         
-        <hr className="border-gray-600" />
+        <hr className="border-gray-700" />
         {isFirebaseAvailable ? (
           <>
             {user ? (
               <>
-                  <div className="flex items-center w-full text-left p-2 rounded-md bg-gray-700/50">
-                      <img src={user.photoURL || undefined} alt="user" className="h-6 w-6 rounded-full mr-3"/>
-                      <span className="flex-grow text-sm font-medium text-gray-200 truncate" title={user.displayName || 'User'}>{user.displayName || 'Logged In'}</span>
-                      <button onClick={onSignOut} title="Sign Out">
+                  <div className="flex items-center w-full text-left p-2 rounded-md bg-gray-900/50">
+                      <img src={user.user_metadata.avatar_url || undefined} alt="user" className="h-6 w-6 rounded-full mr-3"/>
+                      <span className="flex-grow text-sm font-medium text-gray-200 truncate" title={user.user_metadata.full_name || user.email}>{user.user_metadata.full_name || user.email}</span>
+                      <button onClick={onSignOut} title="Sign Out" className="p-1 rounded-full hover:bg-gray-700">
                           <LogOut className="h-5 w-5 text-gray-400 hover:text-white"/>
                       </button>
                   </div>
-                  <GlobalToolButton icon={Cloud} label={isSaving ? "Saving..." : "Save to Cloud"} onClick={onSaveToCloud} disabled={!isPdfLoaded || isSaving} />
+                  <GlobalToolButton icon={Cloud} label="Save to Cloud" onClick={onSaveToCloud} disabled={!isPdfLoaded} />
                   <GlobalToolButton icon={FolderOpen} label="Load from Cloud" onClick={onLoadFromCloud} />
               </>
             ) : (
@@ -168,21 +165,19 @@ const Toolbar: React.FC<ToolbarProps> = ({
           </>
         ) : (
             <div className="p-2.5 rounded-md bg-gray-700/50 text-gray-400 text-xs">
-                Cloud features are disabled. This widget must be hosted to connect to a Firebase project.
+                Cloud features are disabled. This widget must be hosted to connect to a backend project.
             </div>
         )}
-        <hr className="border-gray-600" />
+        <hr className="border-gray-700" />
 
         <GlobalToolButton icon={Printer} label="Export as PDF" onClick={onPrint} disabled={!isPdfLoaded} />
         <GlobalToolButton icon={Sparkles} label="Generate BoQ (AI)" onClick={onGenerateBoq} disabled={!isPdfLoaded} />
       </div>
       
-      {/* --- Markup Tools --- */}
       {isPdfLoaded && purposeConfig && (
         <div className="flex-grow flex flex-col min-h-0">
           <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 mt-2">Markup Tools</h2>
           
-          {/* Tab Navigation */}
           <nav className="flex-shrink-0 grid grid-cols-3 gap-1 mb-3">
             {MARKUP_TOOL_CATEGORIES.map(cat => {
               const categoryInfo = categoryLabels[cat];
@@ -193,7 +188,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
                 <button
                   key={cat}
                   onClick={() => setActiveMarkupTab(cat)}
-                  className={`flex flex-col items-center justify-center p-2 rounded-md text-xs font-medium transition-colors duration-200 focus:outline-none ${
+                  className={`flex flex-col items-center justify-center p-2 rounded-md text-xs font-medium transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-500/50 ${
                       activeMarkupTab === cat ? 'bg-indigo-600 text-white' : 'bg-gray-700/60 hover:bg-gray-700 text-gray-300'
                   }`}
                 >
@@ -204,7 +199,6 @@ const Toolbar: React.FC<ToolbarProps> = ({
             })}
           </nav>
 
-          {/* Tab Content */}
           <div className="space-y-1 flex-grow overflow-y-auto pr-1">
             {activeMarkupTab === 'general' && (
               <>
@@ -238,7 +232,6 @@ const Toolbar: React.FC<ToolbarProps> = ({
               );
             })}
 
-            {/* Conditional General Tools */}
             {activeMarkupTab === 'general' && (
               <>
                  {purposeConfig.label === DesignPurpose.PV_DESIGN && (
