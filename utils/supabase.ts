@@ -1,4 +1,4 @@
-import { createClient, SupabaseClient, User } from '@supabase/supabase-js';
+import { createClient, SupabaseClient, User, AuthSession } from '@supabase/supabase-js';
 import { DesignPurpose, EquipmentItem, SupplyLine, SupplyZone, ScaleInfo, Containment, PVPanelConfig, RoofMask, PVArrayItem, Task } from '../types';
 
 let supabase: SupabaseClient | null = null;
@@ -7,7 +7,7 @@ export let isSupabaseInitialized = false;
 const BUCKET_NAME = 'design-pdfs';
 
 export const initializeSupabase = (supabaseUrl: string, supabaseAnonKey: string) => {
-    if (isSupabaseInitialized || !supabaseUrl || !supabaseAnonKey || supabaseUrl === "YOUR_SUPABASE_URL") {
+    if (isSupabaseInitialized || !supabaseUrl || !supabaseAnonKey || supabaseUrl.includes("YOUR_SUPABASE_URL")) {
         if (!isSupabaseInitialized) console.warn("Supabase credentials not provided. Cloud features will be disabled.");
         return;
     }
@@ -26,7 +26,7 @@ export const getSupabase = () => {
     return supabase;
 }
 
-export const onAuthChange = (callback: (event: string, session: any) => void) => {
+export const onAuthChange = (callback: (event: string, session: AuthSession | null) => void) => {
     const supabase = getSupabase();
     return supabase.auth.onAuthStateChange(callback);
 };
@@ -97,22 +97,21 @@ export const saveDesign = async (designName: string, designData: DesignDataForSa
         .eq('id', designId);
     if (updateError) throw updateError;
     
-    // 4. Insert all related items in parallel
+    // 4. Insert all related items in parallel, ensuring no 'id' field is sent for auto-generation
     const { equipment, lines, zones, containment, roofMasks, pvArrays, tasks } = designData;
     const promises = [];
-    if (equipment.length > 0) promises.push(supabase.from('equipment').insert(equipment.map(d => ({ ...d, design_id: designId, id: undefined }))));
-    if (lines.length > 0) promises.push(supabase.from('lines').insert(lines.map(d => ({ ...d, design_id: designId, id: undefined, from_node: d.from, to_node: d.to, path_length: d.pathLength }))));
-    if (zones.length > 0) promises.push(supabase.from('zones').insert(zones.map(d => ({ ...d, design_id: designId, id: undefined }))));
-    if (containment.length > 0) promises.push(supabase.from('containment').insert(containment.map(d => ({ ...d, design_id: designId, id: undefined }))));
-    if (roofMasks.length > 0) promises.push(supabase.from('roof_masks').insert(roofMasks.map(d => ({ ...d, design_id: designId, id: undefined }))));
-    if (pvArrays.length > 0) promises.push(supabase.from('pv_arrays').insert(pvArrays.map(d => ({ ...d, design_id: designId, id: undefined }))));
-    if (tasks.length > 0) promises.push(supabase.from('tasks').insert(tasks.map(d => ({ ...d, design_id: designId, id: undefined, linked_item_id: d.linkedItemId, assigned_to: d.assignedTo }))));
+    if (equipment.length > 0) promises.push(supabase.from('equipment').insert(equipment.map(({id, ...d}) => ({ ...d, design_id: designId }))));
+    if (lines.length > 0) promises.push(supabase.from('lines').insert(lines.map(({id, ...d}) => ({ ...d, design_id: designId, from_node: d.from, to_node: d.to, path_length: d.pathLength }))));
+    if (zones.length > 0) promises.push(supabase.from('zones').insert(zones.map(({id, ...d}) => ({ ...d, design_id: designId }))));
+    if (containment.length > 0) promises.push(supabase.from('containment').insert(containment.map(({id, ...d}) => ({ ...d, design_id: designId }))));
+    if (roofMasks.length > 0) promises.push(supabase.from('roof_masks').insert(roofMasks.map(({id, ...d}) => ({ ...d, design_id: designId }))));
+    if (pvArrays.length > 0) promises.push(supabase.from('pv_arrays').insert(pvArrays.map(({id, ...d}) => ({ ...d, design_id: designId }))));
+    if (tasks.length > 0) promises.push(supabase.from('tasks').insert(tasks.map(({id, ...d}) => ({ ...d, design_id: designId, linked_item_id: d.linkedItemId, assigned_to: d.assignedTo }))));
 
     const results = await Promise.all(promises);
     const firstError = results.find(res => res.error);
     if (firstError) {
         console.error("Error saving design components:", firstError.error);
-        // TODO: Implement cleanup logic here (delete design, file, etc.)
         throw firstError.error;
     }
 };

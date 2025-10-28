@@ -522,7 +522,7 @@ const MainApp: React.FC = () => {
         onGenerateBoq={handleOpenBoqModal} isPdfLoaded={!!pdfDoc && !!purposeConfig}
         placementRotation={placementRotation} onRotationChange={setPlacementRotation}
         purposeConfig={purposeConfig} isPvDesignReady={pvDesignReady} isSnappingEnabled={isSnappingEnabled}
-        setIsSnappingEnabled={setIsSnappingEnabled} isFirebaseAvailable={isSupabaseInitialized} user={user}
+        setIsSnappingEnabled={setIsSnappingEnabled} isSupabaseAvailable={isSupabaseInitialized} user={user}
         onSignIn={signInWithGoogle} onSignOut={signOut} onUndo={handleUndo} onRedo={handleRedo}
         canUndo={canUndo} canRedo={canRedo}
       />

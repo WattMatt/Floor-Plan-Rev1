@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo } from 'react';
 import { Layers, LayoutGrid, PlusCircle, CheckCircle, Clock, Circle, ChevronDown } from 'lucide-react';
 import { EquipmentItem, SupplyLine, SupplyZone, Containment, EquipmentType, DesignPurpose, PVPanelConfig, PVArrayItem, Task, TaskStatus } from '../types';
@@ -486,8 +485,8 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({
         [TaskStatus.DONE]: tasks.filter(t => t.status === TaskStatus.DONE),
     };
 
-    // FIX: Use generic parameter for reduce to ensure correct type inference for `acc`.
-    const tasksByAssignee = tasks.reduce<Record<string, Task[]>>((acc, task) => {
+    // FIX: Untyped function calls may not accept type arguments.
+    const tasksByAssignee = tasks.reduce((acc: Record<string, Task[]>, task) => {
         const assignee = task.assignedTo?.trim() || 'Unassigned';
         if (!acc[assignee]) {
             acc[assignee] = [];

@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo } from 'react';
 import { Layers, LayoutGrid, PlusCircle, CheckCircle, Clock, Circle, ChevronDown } from 'lucide-react';
 import { EquipmentItem, SupplyLine, SupplyZone, Containment, EquipmentType, DesignPurpose, PVPanelConfig, PVArrayItem, Task, TaskStatus } from '../types';
@@ -486,14 +485,15 @@ const EquipmentPanel: React.FC<EquipmentPanelProps> = ({
         [TaskStatus.DONE]: tasks.filter(t => t.status === TaskStatus.DONE),
     };
 
-    const tasksByAssignee = tasks.reduce((acc, task) => {
+    // FIX: Untyped function calls may not accept type arguments.
+    const tasksByAssignee = tasks.reduce((acc: Record<string, Task[]>, task) => {
         const assignee = task.assignedTo?.trim() || 'Unassigned';
         if (!acc[assignee]) {
             acc[assignee] = [];
         }
         acc[assignee].push(task);
         return acc;
-    }, {} as Record<string, Task[]>);
+    }, {});
 
     const itemDict = new Map<string, string>();
     equipment.forEach(e => itemDict.set(e.id, e.name || e.type));

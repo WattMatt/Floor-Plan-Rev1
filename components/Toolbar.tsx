@@ -59,7 +59,7 @@ interface ToolbarProps {
   isPvDesignReady: boolean;
   isSnappingEnabled: boolean;
   setIsSnappingEnabled: React.Dispatch<React.SetStateAction<boolean>>;
-  isFirebaseAvailable: boolean; // Renamed for clarity but serves same purpose for Supabase
+  isSupabaseAvailable: boolean;
   user: User | null;
   onSignIn: () => void;
   onSignOut: () => void;
@@ -90,7 +90,7 @@ const categoryLabels: Record<MarkupToolCategory, { label: string; icon: React.El
 const Toolbar: React.FC<ToolbarProps> = ({ 
   activeTool, onToolSelect, onFileChange, onSaveToCloud, onLoadFromCloud, onPrint, isPdfLoaded,
   placementRotation, onRotationChange, purposeConfig, isPvDesignReady, isSnappingEnabled, setIsSnappingEnabled,
-  onGenerateBoq, isFirebaseAvailable, user, onSignIn, onSignOut,
+  onGenerateBoq, isSupabaseAvailable, user, onSignIn, onSignOut,
   onUndo, onRedo, canUndo, canRedo
 }) => {
   const [activeMarkupTab, setActiveMarkupTab] = useState<MarkupToolCategory>('general');
@@ -145,7 +145,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
         <input id="pdf-upload" type="file" className="hidden" onChange={onFileChange} accept=".pdf" />
         
         <hr className="border-gray-700" />
-        {isFirebaseAvailable ? (
+        {isSupabaseAvailable ? (
           <>
             {user ? (
               <>
